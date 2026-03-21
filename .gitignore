@@ -27,6 +27,8 @@ data/raw/
 data/processed/
 *.csv
 *.parquet
+*.tar
+*.tar.bz2
 !data/synthetic/*.csv
 
 # Models
