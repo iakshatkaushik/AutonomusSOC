@@ -11,3 +11,7 @@ shap>=0.44
 torch>=2.0
 google-generativeai>=0.8
 openai>=1.0
+imbalanced-learn>=0.12
+chromadb>=0.5
+sentence-transformers>=3.0
+requests>=2.31

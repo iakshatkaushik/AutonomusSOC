@@ -2,6 +2,11 @@
 
 Each tool queries the SQLite database and returns a clean text summary
 that the LLM can reason over in the ReAct loop.
+
+Tools are grouped into two categories:
+  READ  tools — query evidence from the database (safe, no side effects)
+  WRITE tools — take reversible actions (flag, escalate, suppress) stored in DB
+               Write actions are only called by the agent when confidence >= 0.85
 """
 from datetime import datetime, timedelta
 
@@ -10,6 +15,8 @@ from sqlalchemy import text
 
 from src.utils.db import engine
 
+
+# ─── READ TOOLS ──────────────────────────────────────────────────────────────
 
 def get_user_logs(user_id: str, days: int = 14, log_type: str = "all") -> str:
     """Get raw event logs for a user over the last N days.
@@ -96,11 +103,16 @@ def get_user_risk_profile(user_id: str) -> str:
         engine, params={"uid": user_id}
     )
 
+    # Show xgb_score if present in DB
+    xgb_line = ""
+    if "xgb_score" in r.index:
+        xgb_line = f"XGBoost Score: {r['xgb_score']:.1f}/100\n"
+
     summary = f"""=== RISK PROFILE: {user_id} ===
 Risk Score:  {r['risk_score']:.1f}/100
 Rule Score:  {r['rule_score']:.1f}/100
 IF Score:    {r['if_score']:.1f}/100
-Is Insider:  {bool(r['is_insider'])}
+{xgb_line}Is Insider:  {bool(r['is_insider'])}
 Alert Count: {r['alert_count']}
 
 BEHAVIORAL FEATURE SUMMARY (last 30 days):
@@ -138,7 +150,6 @@ def get_shap_explanation(user_id: str, shap_data: dict) -> str:
 
 def compare_to_peers(user_id: str) -> str:
     """Compare user's behavior to the normal user population."""
-    # Get this user's feature averages
     user_feats = pd.read_sql(
         text("SELECT * FROM user_features WHERE user_id = :uid"),
         engine, params={"uid": user_id}
@@ -146,7 +157,6 @@ def compare_to_peers(user_id: str) -> str:
     if user_feats.empty:
         return f"No feature data for {user_id}."
 
-    # Get all users' average features
     all_feats = pd.read_sql("SELECT * FROM user_features", engine)
 
     numeric_cols = [
@@ -178,7 +188,6 @@ def compare_to_peers(user_id: str) -> str:
 
 def get_correlated_users(user_id: str, top_n: int = 5) -> str:
     """Find other users with similar suspicious patterns."""
-    # Get flagged users with HIGH/CRITICAL alerts
     high_risk = pd.read_sql(
         text("SELECT user_id, alert_type, severity, risk_score FROM alerts "
              "WHERE severity IN ('CRITICAL', 'HIGH') AND user_id != :uid "
@@ -189,7 +198,7 @@ def get_correlated_users(user_id: str, top_n: int = 5) -> str:
     if high_risk.empty:
         return "No correlated high-risk users found."
 
-    lines = [f"=== CORRELATED HIGH-RISK USERS ==="]
+    lines = ["=== CORRELATED HIGH-RISK USERS ==="]
     lines.append(f"Other users with CRITICAL/HIGH alerts (excluding {user_id}):")
     for _, row in high_risk.iterrows():
         lines.append(
@@ -219,12 +228,195 @@ def get_alert_history(user_id: str) -> str:
     return "\n".join(lines)
 
 
-# Registry — maps tool name string to function (for ReAct parser)
+def search_past_incidents(query: str, top_n: int = 3) -> str:
+    """Search past investigation reports for similar threat patterns.
+
+    Uses ChromaDB semantic search to find historically similar incidents.
+    Falls back gracefully if memory module is not initialized.
+
+    Args:
+        query: Natural language description of the pattern to search for.
+        top_n: Number of similar incidents to return.
+    """
+    try:
+        from src.agent.memory import search_similar_incidents
+        results = search_similar_incidents(query, top_n=top_n)
+        if not results:
+            return "No similar past incidents found in memory."
+        lines = ["=== SIMILAR PAST INCIDENTS ==="]
+        for r in results:
+            lines.append(
+                f"  [{r.get('severity','?')}] user={r.get('user_id','?')} "
+                f"type={r.get('threat_scenario','?')} confidence={r.get('confidence',0):.2f}\n"
+                f"    Summary: {r.get('summary','N/A')}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Memory search unavailable ({e}). Proceeding without historical context."
+
+
+# ─── WRITE TOOLS (Active Response) ───────────────────────────────────────────
+# These tools modify the database. They should only be called by the agent
+# when confidence >= CONFIDENCE_THRESHOLD (0.85).
+# All actions are reversible (no external system calls — DB only).
+
+CONFIDENCE_THRESHOLD = 0.85
+
+
+def flag_user_for_review(user_id: str, reason: str, confidence: float) -> str:
+    """Flag a user for immediate SOC analyst review.
+
+    This writes a FLAGGED status to the alerts table and creates a visible
+    notification in the dashboard. Safe and reversible — no system access.
+
+    Args:
+        user_id: The user to flag.
+        reason: Short explanation of why the flag was raised.
+        confidence: Agent's confidence score (0-1). Must be >= 0.85 to flag.
+    """
+    if confidence < CONFIDENCE_THRESHOLD:
+        return (
+            f"⚠️  Confidence {confidence:.2f} < threshold {CONFIDENCE_THRESHOLD}. "
+            f"Flag NOT applied. Recommend human review instead."
+        )
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE alerts
+                    SET status = 'FLAGGED_FOR_REVIEW',
+                        description = description || ' | AGENT FLAG: ' || :reason
+                    WHERE user_id = :uid AND status = 'open'
+                """),
+                {"uid": user_id, "reason": reason}
+            )
+        return (
+            f"✅ User {user_id} flagged for immediate SOC review.\n"
+            f"   Reason: {reason}\n"
+            f"   Confidence: {confidence:.2f}\n"
+            f"   Status set to FLAGGED_FOR_REVIEW in dashboard."
+        )
+    except Exception as e:
+        return f"Error flagging user: {e}"
+
+
+def escalate_to_hr(user_id: str, report_summary: str, confidence: float) -> str:
+    """Generate a formal HR escalation record with evidence chain.
+
+    Creates a new HIGH-SEVERITY alert of type HR_ESCALATION in the database.
+    The dashboard shows this prominently to HR-linked analyst roles.
+
+    Args:
+        user_id: The user being escalated.
+        report_summary: 1-2 sentence summary of the threat evidence.
+        confidence: Agent's confidence score. Must be >= 0.85 to escalate.
+    """
+    if confidence < CONFIDENCE_THRESHOLD:
+        return (
+            f"⚠️  Confidence {confidence:.2f} < threshold {CONFIDENCE_THRESHOLD}. "
+            f"HR Escalation NOT triggered. Recommend MONITOR status instead."
+        )
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO alerts (user_id, alert_type, severity, risk_score,
+                        description, contributing_factors, recommended_actions,
+                        status, created_at)
+                    VALUES (:uid, 'HR_ESCALATION', 'CRITICAL', 95.0,
+                        :desc, '["Agent autonomous escalation"]',
+                        '["Contact HR", "Restrict system access", "Preserve evidence"]',
+                        'HR_ESCALATED', :ts)
+                """),
+                {
+                    "uid": user_id,
+                    "desc": f"[AGENT ESCALATION] {report_summary}",
+                    "ts": datetime.now().isoformat(),
+                }
+            )
+        return (
+            f"✅ HR Escalation record created for user {user_id}.\n"
+            f"   Summary: {report_summary}\n"
+            f"   Confidence: {confidence:.2f}\n"
+            f"   Alert type: HR_ESCALATION (CRITICAL) — visible on dashboard."
+        )
+    except Exception as e:
+        return f"Error creating HR escalation: {e}"
+
+
+def suppress_false_positive(alert_id: int, justification: str, confidence: float) -> str:
+    """Mark an alert as a false positive with agent-generated justification.
+
+    This feeds the feedback loop — suppressed alerts are logged for model re-weighting.
+
+    Args:
+        alert_id: The alert ID to suppress.
+        justification: Why this is a false positive.
+        confidence: Agent's confidence that this is benign. Must be >= 0.85.
+    """
+    if confidence < CONFIDENCE_THRESHOLD:
+        return (
+            f"⚠️  Confidence {confidence:.2f} < threshold {CONFIDENCE_THRESHOLD}. "
+            f"False positive suppression NOT applied. Leave for human review."
+        )
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE alerts
+                    SET status = 'FALSE_POSITIVE',
+                        description = description || ' | AGENT SUPPRESSED: ' || :j
+                    WHERE id = :aid
+                """),
+                {"aid": alert_id, "j": justification}
+            )
+        return (
+            f"✅ Alert {alert_id} suppressed as FALSE_POSITIVE.\n"
+            f"   Justification: {justification}\n"
+            f"   This will be logged to the feedback module for model improvement."
+        )
+    except Exception as e:
+        return f"Error suppressing alert: {e}"
+
+
+def quarantine_alert(alert_id: int, reason: str) -> str:
+    """Lock an alert under investigation — prevents parallel analyst actions.
+
+    Sets alert status to UNDER_INVESTIGATION. Any other agent or analyst
+    querying this alert will see it is already being handled.
+
+    Args:
+        alert_id: Alert ID to quarantine.
+        reason: Why it's being quarantined (usually 'Agent investigation in progress').
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE alerts
+                    SET status = 'UNDER_INVESTIGATION'
+                    WHERE id = :aid AND status = 'open'
+                """),
+                {"aid": alert_id}
+            )
+        return f"✅ Alert {alert_id} locked as UNDER_INVESTIGATION. Reason: {reason}"
+    except Exception as e:
+        return f"Error quarantining alert: {e}"
+
+
+# ─── Registry — maps tool name string to function (for ReAct parser) ─────────
 TOOL_REGISTRY = {
+    # Read tools
     "get_user_logs": get_user_logs,
     "get_user_risk_profile": get_user_risk_profile,
     "get_shap_explanation": get_shap_explanation,
     "compare_to_peers": compare_to_peers,
     "get_correlated_users": get_correlated_users,
     "get_alert_history": get_alert_history,
+    "search_past_incidents": search_past_incidents,
+    # Write tools (active response)
+    "flag_user_for_review": flag_user_for_review,
+    "escalate_to_hr": escalate_to_hr,
+    "suppress_false_positive": suppress_false_positive,
+    "quarantine_alert": quarantine_alert,
 }

@@ -129,8 +129,9 @@ def run(top: int = 5, user_id: str = None, severity_filter: str = None):
             alert_type=alert["alert_type"],
             risk_score=float(alert["risk_score"]),
             severity=alert["severity"],
+            alert_id=int(alert["id"]),
             shap_data=shap_data,
-            max_iterations=4,
+            max_iterations=8,
         )
 
         report_id = store_report(report, alert_id=int(alert["id"]))

@@ -487,7 +487,7 @@ def trigger_investigation(alert_id: int, db: Session = Depends(get_db)):
             risk_score=float(alert.risk_score),
             severity=alert.severity,
             shap_data={},           # Agent tools query DB directly
-            max_iterations=4,
+            max_iterations=8,
         )
 
         # Store the investigation report
@@ -536,6 +536,44 @@ def get_report(alert_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No investigation report for this alert")
 
     return _report_to_dict(report)
+
+
+# ─── 5. PDF Report Generation ─────────────────────────────────────────
+
+@app.get("/api/v1/reports/{alert_id}/pdf")
+def download_pdf_report(alert_id: int, db: Session = Depends(get_db)):
+    """Generate and download a dark-themed PDF incident report."""
+    from fastapi.responses import Response
+
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert_data = _alert_to_dict(alert)
+
+    # Get investigation report if exists
+    report = (
+        db.query(InvestigationReport)
+        .filter(InvestigationReport.alert_id == alert_id)
+        .order_by(InvestigationReport.created_at.desc())
+        .first()
+    )
+    report_data = _report_to_dict(report) if report else None
+
+    try:
+        from src.api.pdf_report import generate_incident_pdf
+        pdf_bytes = generate_incident_pdf(alert_data, report_data)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
+    filename = f"CyberSOC_Report_Alert_{alert_id}_{alert_data['user_id']}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ─── Health ────────────────────────────────────────────────────────────

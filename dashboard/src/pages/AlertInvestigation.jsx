@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { fetchAlert, fetchUserLogs, triggerInvestigation, updateAlertStatus } from '../api';
+import { fetchAlert, fetchUserLogs, triggerInvestigation, updateAlertStatus, downloadReportPdf } from '../api';
 
 /* ── Risk Gauge SVG ─────────────────────────────────────────────────── */
 function RiskGauge({ score }) {
@@ -51,6 +51,7 @@ export default function AlertInvestigation() {
   const [investigating, setInvestigating] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [investigateError, setInvestigateError] = useState(null);
+  const [downloading, setDownloading] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -183,6 +184,29 @@ export default function AlertInvestigation() {
               {investigating ? (
                 <><div className="spinner spinner-sm" style={{ borderTopColor: 'white' }} /> Running Agent...</>
               ) : '🤖 Investigate with AI'}
+            </button>
+            <button
+              onClick={() => {
+                setDownloading(true);
+                downloadReportPdf(id)
+                  .then(() => setDownloading(false))
+                  .catch(() => setDownloading(false));
+              }}
+              disabled={downloading}
+              style={{
+                width: '100%', padding: '12px 20px', borderRadius: 12, fontSize: '0.82rem', fontWeight: 700,
+                cursor: 'pointer', transition: 'all 0.2s ease',
+                background: 'linear-gradient(135deg, rgba(34,211,238,0.08), rgba(99,135,241,0.08))',
+                color: '#22D3EE',
+                border: '1px solid rgba(34,211,238,0.18)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'linear-gradient(135deg, rgba(34,211,238,0.15), rgba(99,135,241,0.15))'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'linear-gradient(135deg, rgba(34,211,238,0.08), rgba(99,135,241,0.08))'; }}
+            >
+              {downloading ? (
+                <><div className="spinner spinner-sm" style={{ borderTopColor: '#22D3EE' }} /> Generating PDF...</>
+              ) : '📄 Download PDF Report'}
             </button>
             {investigateError && (
               <div style={{

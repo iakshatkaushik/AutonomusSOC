@@ -2,12 +2,11 @@
 
 Architecture: Reason → Act → Observe → Repeat → Final Answer
 
-The agent:
-1. Receives an alert context (user_id, risk score, alert type)
-2. Reasons about what to investigate
-3. Calls tools to gather evidence from the database
-4. Iterates until it has enough to write a full investigation report
-5. Outputs a structured InvestigationReport
+Upgrades from v1:
+  1. Memory-first: Searches past incidents BEFORE investigation begins
+  2. Expanded toolset: 11 tools including 4 active-response write tools
+  3. Confidence-gated actions: Agent may escalate/flag autonomously if confidence >= 0.85
+  4. Post-investigation: Stores report to RAG memory for future cross-alert correlation
 
 LLM Provider is swappable via .env:
   LLM_PROVIDER=gemini   → uses google-generativeai (free tier)
@@ -19,8 +18,13 @@ import re
 from datetime import datetime
 
 from src.agent.tools import (
-    TOOL_REGISTRY, get_user_logs, get_user_risk_profile,
-    get_shap_explanation, compare_to_peers, get_correlated_users, get_alert_history
+    TOOL_REGISTRY,
+    get_user_logs, get_user_risk_profile,
+    get_shap_explanation, compare_to_peers,
+    get_correlated_users, get_alert_history,
+    search_past_incidents,
+    flag_user_for_review, escalate_to_hr,
+    suppress_false_positive, quarantine_alert,
 )
 from src.utils.config import PROJECT_ROOT
 from dotenv import load_dotenv
@@ -35,15 +39,12 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-flash")
 # ─── LLM Abstraction ──────────────────────────────────────────────────
 
 def _call_llm(system_prompt: str, user_message: str) -> str:
-    """Call the configured LLM provider via REST API.
-    Extracts retryDelay from Gemini 429 responses and waits accordingly.
-    """
+    """Call the configured LLM provider. Handles rate-limiting and model fallbacks."""
     import time
     import requests as _requests
     import re as _re
 
     if LLM_PROVIDER == "gemini":
-        # Models to try in order of preference
         models_to_try = [LLM_MODEL]
         for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
             if fallback not in models_to_try:
@@ -65,21 +66,16 @@ def _call_llm(system_prompt: str, user_message: str) -> str:
                         return data["candidates"][0]["content"]["parts"][0]["text"]
 
                     elif resp.status_code == 429:
-                        # Extract retryDelay from Google's response
-                        wait = 15  # default
+                        wait = 15
                         try:
                             err_data = resp.json()
-                            err_details = err_data.get("error", {}).get("details", [])
-                            for d in err_details:
+                            for d in err_data.get("error", {}).get("details", []):
                                 if "retryDelay" in d:
-                                    delay_str = d["retryDelay"]
-                                    # Parse "24s" or "24.5s"
-                                    match = _re.search(r"([\d.]+)", delay_str)
+                                    match = _re.search(r"([\d.]+)", d["retryDelay"])
                                     if match:
                                         wait = min(int(float(match.group(1))) + 2, 65)
                         except Exception:
                             pass
-
                         print(f"  [LLM] Rate-limited on {model_name} (attempt {attempt+1}/3), waiting {wait}s...")
                         time.sleep(wait)
                         last_err = Exception(f"429 RESOURCE_EXHAUSTED on {model_name}")
@@ -87,11 +83,10 @@ def _call_llm(system_prompt: str, user_message: str) -> str:
                     elif resp.status_code == 404:
                         print(f"  [LLM] Model {model_name} not found, trying next...")
                         last_err = Exception(f"404 Model {model_name} not found")
-                        break  # Skip to next model
+                        break
 
                     else:
-                        err_msg = resp.text[:300]
-                        raise Exception(f"Gemini API error {resp.status_code}: {err_msg}")
+                        raise Exception(f"Gemini API error {resp.status_code}: {resp.text[:300]}")
 
                 except _requests.exceptions.Timeout:
                     last_err = Exception("Request timed out")
@@ -123,43 +118,84 @@ def _call_llm(system_prompt: str, user_message: str) -> str:
 
 # ─── System Prompt ────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an autonomous SOC (Security Operations Center) investigation agent.
+SYSTEM_PROMPT = """You are an autonomous SOC (Security Operations Center) investigation agent for CyberSOC-Agent.
 You have just received an insider threat alert from our XGBoost detection system.
-Your job is to investigate the user thoroughly using the available tools, then produce a final investigation report.
+Your job is to investigate the user thoroughly and produce a final investigation report.
 
-AVAILABLE TOOLS:
-- get_user_logs(user_id, log_type) — get raw activity logs. log_type: logon/file/email/http/all
-- get_user_risk_profile(user_id) — get full risk score and behavioral feature summary
-- get_shap_explanation(user_id) — get XGBoost model explanation for why this user was flagged
-- compare_to_peers(user_id) — compare this user's behavior to the normal population (Z-scores)
-- get_correlated_users(user_id) — find other high-risk users with similar patterns
-- get_alert_history(user_id) — get all alerts for this user
+═══════════════════════════════════
+AVAILABLE TOOLS
+═══════════════════════════════════
 
-INVESTIGATION PROTOCOL:
-1. Start by getting the risk profile and SHAP explanation to understand why the model flagged this user
-2. Then query relevant logs based on the alert type
-3. Compare to peers to understand statistical significance
-4. Look for correlated users
-5. Produce your final report
+READ TOOLS (gather evidence):
+  get_user_logs(user_id, log_type)        — Raw activity logs. log_type: logon/file/email/http/all
+  get_user_risk_profile(user_id)          — Full risk score and behavioral feature summary (includes XGBoost score)
+  get_shap_explanation(user_id)           — XGBoost SHAP explanation: WHY this user was flagged
+  compare_to_peers(user_id)               — Z-score comparison to normal population (flags >2σ)
+  get_correlated_users(user_id)           — Other high-risk users with similar patterns
+  get_alert_history(user_id)              — All past alerts for this user
+  search_past_incidents(query)            — Search memory for similar historical threats (ALWAYS call this first)
 
-FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
-THOUGHT: [your step-by-step reasoning about what to do next]
+WRITE TOOLS (active response — use only when confidence >= 0.85):
+  flag_user_for_review(user_id, reason, confidence)        — Flag for immediate human SOC review
+  escalate_to_hr(user_id, report_summary, confidence)      — Create formal HR escalation record
+  suppress_false_positive(alert_id, justification, confidence) — Mark as false positive (feeds retraining)
+  quarantine_alert(alert_id, reason)                        — Lock alert while investigating
+
+═══════════════════════════════════
+INVESTIGATION PROTOCOL
+═══════════════════════════════════
+
+STEP 1 — MEMORY (MANDATORY FIRST STEP):
+  Call search_past_incidents() with a natural language description of the alert pattern.
+  Use any historical context found to inform your investigation.
+
+STEP 2 — PROFILE + SHAP:
+  Call get_user_risk_profile() and get_shap_explanation() to understand why the model flagged this user.
+
+STEP 3 — EVIDENCE GATHERING:
+  Query logs relevant to the alert type:
+  - DATA_EXFILTRATION → check file (USB copies)+ logon (after-hours) + http (wikileaks)
+  - JOB_HUNTING → check http (monster.com, craigslist)
+  - DISGRUNTLED_SABOTAGE → check email (angry keywords) + http (spectorsoft)
+
+STEP 4 — PEER COMPARISON:
+  Call compare_to_peers() to establish statistical significance.
+
+STEP 5 — CORRELATIONS:
+  Call get_correlated_users() to detect coordinated campaigns.
+
+STEP 6 — TAKE ACTION (if confidence >= 0.85):
+  Based on your findings, call ONE write tool:
+  - CONFIRMED THREAT → escalate_to_hr() or flag_user_for_review()
+  - FALSE POSITIVE → suppress_false_positive()
+
+STEP 7 — FINAL ANSWER
+
+═══════════════════════════════════
+RESPONSE FORMAT
+═══════════════════════════════════
+
+Use EXACTLY this format for each step:
+THOUGHT: [your reasoning about what to do next and what you've observed so far]
 ACTION: tool_name(user_id="value", log_type="value")
 ---
-Then wait for the OBSERVATION, then continue with THOUGHT/ACTION until you have enough evidence.
-When you are done investigating, write:
+Wait for the OBSERVATION, then continue with the next THOUGHT/ACTION.
+
+When completely done, write:
 FINAL_ANSWER: {
   "summary": "1-2 sentence summary of what happened",
   "threat_scenario": "DATA_EXFILTRATION or JOB_HUNTING or DISGRUNTLED_SABOTAGE or UNKNOWN",
   "confidence": 0.0 to 1.0,
   "evidence_chain": ["timestamp: event1", "timestamp: event2", ...],
-  "reasoning": "detailed step-by-step reasoning",
+  "reasoning": "detailed step-by-step reasoning including peer Z-scores and SHAP values",
   "recommended_action": "ESCALATE_TO_HR or ESCALATE_TO_SECURITY or MONITOR or DISMISS",
   "recommended_actions_detail": ["step 1", "step 2", ...],
-  "correlated_users": ["user1", "user2"]
+  "correlated_users": ["user1", "user2"],
+  "actions_taken": ["e.g. flagged user for review", "e.g. no autonomous action (confidence < 0.85)"]
 }
 
-Be thorough but concise. Use the tools. Do not make up evidence.
+Be thorough but evidence-based. Reference Z-scores and SHAP values in your reasoning.
+Do not fabricate evidence. Do not skip the memory search.
 """
 
 
@@ -167,12 +203,10 @@ Be thorough but concise. Use the tools. Do not make up evidence.
 
 def _parse_and_execute_action(action_line: str, user_id: str, shap_data: dict) -> str:
     """Parse an ACTION line and execute the corresponding tool."""
-    # Extract tool name
     action_line = action_line.strip()
     if not action_line:
         return "No action specified."
 
-    # Match: tool_name(args)
     match = re.match(r"(\w+)\((.*)\)", action_line, re.DOTALL)
     if not match:
         return f"Could not parse action: {action_line}"
@@ -180,15 +214,18 @@ def _parse_and_execute_action(action_line: str, user_id: str, shap_data: dict) -
     tool_name = match.group(1).strip()
     args_str = match.group(2).strip()
 
-    # Parse kwargs
-    kwargs = {"user_id": user_id}  # Always inject user_id as default
+    # Parse kwargs — always inject user_id as default
+    kwargs = {"user_id": user_id}
 
     for kv in re.findall(r'(\w+)\s*=\s*"([^"]*)"', args_str):
         kwargs[kv[0]] = kv[1]
-    for kv in re.findall(r'(\w+)\s*=\s*(\d+)', args_str):
-        kwargs[kv[0]] = int(kv[1])
+    for kv in re.findall(r'(\w+)\s*=\s*(\d+\.?\d*)', args_str):
+        try:
+            kwargs[kv[0]] = float(kv[1]) if '.' in kv[1] else int(kv[1])
+        except ValueError:
+            pass
 
-    # Special injection: shap_data needs to come from our cache
+    # Special injection: shap_data must come from our cache
     if tool_name == "get_shap_explanation":
         kwargs["shap_data"] = shap_data
 
@@ -209,8 +246,10 @@ def investigate(
     alert_type: str,
     risk_score: float,
     severity: str,
+    alert_id: int = None,
     shap_data: dict = None,
-    max_iterations: int = 5,
+    max_iterations: int = 8,
+    store_to_memory: bool = True,
 ) -> dict:
     """Run the full ReAct investigation loop.
 
@@ -219,8 +258,10 @@ def investigate(
         alert_type: DATA_EXFILTRATION / JOB_HUNTING / DISGRUNTLED_SABOTAGE
         risk_score: 0-100 risk score from XGBoost
         severity: CRITICAL / HIGH / MEDIUM
+        alert_id: DB alert ID (optional, for write tools like quarantine/suppress)
         shap_data: Dict of per-user SHAP explanations (optional)
-        max_iterations: Max ReAct iterations before forcing conclusion
+        max_iterations: Max ReAct iterations before forcing conclusion (default 8, was 5)
+        store_to_memory: If True, store the final report in ChromaDB for future retrieval
 
     Returns:
         InvestigationReport dict
@@ -230,43 +271,59 @@ def investigate(
 
     print(f"\n[AGENT] Investigating user {user_id} (score={risk_score:.1f}, type={alert_type})")
 
+    # Quarantine the alert immediately to prevent parallel work
+    if alert_id is not None:
+        quarantine_alert(alert_id, "Agent investigation in progress")
+
     # Build initial context
     initial_message = f"""ALERT RECEIVED:
 User ID:     {user_id}
+Alert ID:    {alert_id or 'N/A'}
 Risk Score:  {risk_score:.1f}/100
 Severity:    {severity}
 Alert Type:  {alert_type}
 Timestamp:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-Please investigate this user thoroughly and produce an investigation report.
+IMPORTANT: Begin by calling search_past_incidents() to check if we have seen similar patterns
+before. Then follow the Investigation Protocol above.
 Begin your investigation now."""
 
     # ReAct loop state
     conversation = initial_message
-    observations = []
     iterations = 0
+    actions_taken = []
 
     while iterations < max_iterations:
         iterations += 1
         print(f"  [AGENT] Iteration {iterations}/{max_iterations}...")
 
-        # LLM reasons and acts
         response = _call_llm(SYSTEM_PROMPT, conversation)
         print(f"  [AGENT] LLM response received ({len(response)} chars)")
 
         # Check for FINAL_ANSWER
         if "FINAL_ANSWER:" in response:
-            # Extract the JSON
             json_match = re.search(r"FINAL_ANSWER:\s*(\{.*\})", response, re.DOTALL)
             if json_match:
                 try:
                     report_data = json.loads(json_match.group(1))
                     report_data["user_id"] = user_id
+                    report_data["alert_id"] = alert_id
                     report_data["risk_score"] = risk_score
                     report_data["severity"] = severity
                     report_data["iterations"] = iterations
                     report_data["llm_model"] = LLM_MODEL
+                    report_data["actions_taken"] = actions_taken
+
                     print(f"  [AGENT] ✅ Investigation complete after {iterations} iterations")
+
+                    # Store to memory for future cross-alert correlation
+                    if store_to_memory:
+                        try:
+                            from src.agent.memory import store_report
+                            store_report(report_data)
+                        except Exception as mem_err:
+                            print(f"  [AGENT] Memory store skipped: {mem_err}")
+
                     return report_data
                 except json.JSONDecodeError as e:
                     print(f"  [AGENT] ⚠️  JSON parse error: {e}. Trying to continue...")
@@ -275,31 +332,44 @@ Begin your investigation now."""
         action_match = re.search(r"ACTION:\s*(.+?)(?:\n|$)", response)
         if action_match:
             action_line = action_match.group(1).strip()
-            print(f"  [AGENT] Executing tool: {action_line[:60]}...")
+            print(f"  [AGENT] Executing: {action_line[:80]}...")
             observation = _parse_and_execute_action(action_line, user_id, shap_data)
-            observations.append(f"OBSERVATION:\n{observation}")
 
-            # Append to conversation for next iteration
-            conversation = f"{conversation}\n\n{response}\n\nOBSERVATION:\n{observation}\n\nContinue your investigation."
+            # Track write tool actions
+            for write_tool in ["flag_user_for_review", "escalate_to_hr", "suppress_false_positive"]:
+                if write_tool in action_line:
+                    actions_taken.append(f"{write_tool} called")
+
+            observations_append = f"OBSERVATION:\n{observation}"
+            conversation = f"{conversation}\n\n{response}\n\n{observations_append}\n\nContinue your investigation."
         else:
-            # No action, no final answer — nudge the LLM
             conversation = f"{conversation}\n\n{response}\n\nPlease either use a tool (ACTION: ...) or provide FINAL_ANSWER."
 
-    # Fallback if max iterations reached without FINAL_ANSWER
+    # Fallback if max iterations reached
     print(f"  [AGENT] ⚠️  Max iterations reached, generating fallback report")
     fallback = {
         "user_id": user_id,
+        "alert_id": alert_id,
         "risk_score": risk_score,
         "severity": severity,
         "summary": f"User {user_id} flagged by XGBoost with {risk_score:.1f}/100 risk score for {alert_type}.",
         "threat_scenario": alert_type,
         "confidence": risk_score / 100,
         "evidence_chain": [f"XGBoost detected {alert_type} pattern with score {risk_score:.1f}"],
-        "reasoning": "Investigation could not be completed within iteration limit. Manual review required.",
+        "reasoning": "Investigation could not complete within iteration limit. Manual review required.",
         "recommended_action": "MONITOR",
         "recommended_actions_detail": ["Review user logs manually", "Consult security team"],
         "correlated_users": [],
+        "actions_taken": actions_taken,
         "iterations": iterations,
         "llm_model": LLM_MODEL,
     }
+
+    if store_to_memory:
+        try:
+            from src.agent.memory import store_report
+            store_report(fallback)
+        except Exception:
+            pass
+
     return fallback
