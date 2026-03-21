@@ -146,6 +146,27 @@ class UserRisk(Base):
     scenario = Column(Integer, nullable=True)
 
 
+class InvestigationReport(Base):
+    """LLM agent investigation report — one per alert investigated."""
+    __tablename__ = "investigation_reports"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    alert_id = Column(Integer, index=True, nullable=True)
+    user_id = Column(String, index=True)
+    summary = Column(Text)
+    threat_scenario = Column(String)
+    confidence = Column(Float)
+    evidence_chain = Column(Text)            # JSON list
+    reasoning = Column(Text)
+    recommended_action = Column(String)      # ESCALATE_TO_HR / ESCALATE_TO_SECURITY / MONITOR / DISMISS
+    recommended_actions_detail = Column(Text)  # JSON list
+    correlated_users = Column(Text)          # JSON list
+    risk_score = Column(Float)
+    severity = Column(String)
+    iterations = Column(Integer)
+    llm_model = Column(String)
+    created_at = Column(DateTime)
+
+
 def init_db():
     """Create all tables."""
     Base.metadata.create_all(engine)

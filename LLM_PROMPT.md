@@ -1,237 +1,280 @@
-# 🤖 LLM Prompt — AutonomusSOC
+# 🤖 LLM Prompt — CyberSOC-Agent: Agentic AI Insider Threat System
 
-> **Copy everything below the line into any LLM to get a full execution plan.**
+> **Copy everything below the line into any LLM to get a complete execution plan.**
 
 ---
 
 ```
-You are a senior full-stack AI/ML + cybersecurity engineer. I'm going to describe my hackathon project in full — the dataset I have (with exact schemas, row counts, and file sizes from my analysis), the architecture I'm building, and what I need. Your job is to fully understand it and generate a complete, actionable execution plan.
+You are a senior full-stack AI/ML + cybersecurity engineer. I am going to describe my project in full detail. Your job is to fully understand it and generate a complete, actionable execution plan.
 
 ---
 
-## PROJECT: AutonomusSOC
-**Explainable Insider Threat Detection Engine with Behavioral Rules + Lightweight ML**
+## PROJECT: CyberSOC-Agent
+**An Agentic AI-powered Insider Threat Detection System**
 
-- **Hackathon:** AI-Powered Insider Threat Detection — Techkriti'26 at IIT Kanpur
-- **Solo developer**
-- **Status:** Dataset extracted and analyzed. Architecture finalized. No code written yet.
+This is NOT a simple dashboard or risk-scoring tool.
 
----
+This is a system where:
+1. A **Machine Learning engine** (XGBoost + Rules) continuously scores every user's behavior from organizational logs
+2. When a HIGH/CRITICAL threat is detected, an **LLM-powered Investigation Agent** is triggered
+3. The Agent autonomously investigates — it uses **tools** to query raw logs, explain model decisions, correlate with other users — and iterates in a **ReAct loop** (Reason → Act → Observe → Repeat)
+4. The Agent produces a **structured Investigation Report** with evidence, reasoning, and recommended actions
+5. Everything is shown on an **Analyst Dashboard** where a human SOC analyst reviews Agent findings and makes final decisions
 
-## THE DATASET: CERT Insider Threat r4.2 (CMU)
-
-Already downloaded and extracted. Everything below is verified from actual files.
-
-### Key Facts
-- 1,000 employees, each with an assigned PC + 100 shared lab machines
-- ~501 days of activity (Jan 2010 → May 2011)
-- **70 malicious insiders** across 3 scenarios
-- 930 normal users
-- "Dense needles" dataset — artificially high malicious density, clean patterns
-
-### Files (exact sizes and schemas)
-
-**`logon.csv` — 56 MB, 854,860 rows**
-Fields: `id, date, user, pc, activity` (Logon/Logoff)
-- Date format: `MM/DD/YYYY HH:MM:SS`
-- After-hours logons are explicitly significant (per readme)
-- Screen unlocks = Logon; screen locks NOT recorded
-- Some logons intentionally missing (dirty data)
-- Employee terminations = no new logon from that day
-
-**`email.csv` — 1.1 GB, 2,318,899 rows**
-Fields: `id, date, user, pc, to, cc, bcc, from, size, attachments, content`
-- Internal emails: `@dtaa.com`; external: other domains
-- `content` = space-separated topic keywords (NOT actual body)
-- Multiple recipients (semicolon-separated)
-
-**`file.csv` — 184 MB, 445,582 rows**
-Fields: `id, date, user, pc, filename, content`
-- **Every row = a file copy to USB/removable media**
-- `content` = hex file header + keywords
-- Each user has a normal daily copy count; deviations = significant
-
-**`http.csv` — 14 GB, ~28M+ rows**
-Fields: `id, date, user, pc, url, content`
-- **TOO LARGE to load in memory**
-- We will handle this via `grep` filtering for only target domains
-
-**`psychometric.csv` — 44 KB, 1,001 rows** → ❌ SKIPPING (unrealistic in real SOC)
-
-**⚠️ No `device.csv` exists.** USB connect/disconnect events only appear in answer key files. `file.csv` is the USB activity proxy.
-
-### Ground Truth: The 70 Insiders
-
-Master index: `answers/insiders.csv`
-Fields: `dataset, scenario, details, user, start, end`
-
-**Scenario 1 — Espionage / USB Data Theft (30 insiders)**
-Pattern: After-hours login → browses wikileaks.org (keywords: spy, covert, top-secret, clandestine, surveillance) → USB file copy burst → logoff
-Example: User AAM0658 logged in at 1:34 AM, browsed wikileaks, used USB, logged off at 6:28 AM.
-
-**Scenario 2 — Job Hunting / Disengagement (30 insiders)**
-Pattern: Repeatedly visits job sites (monster.com, craigslist.org, jobhuntersbible.com) with resume/job keywords over multi-week period.
-Example: User AAF0535 browsed monster.com + craigslist from Jun 28 to Aug 20, 2010.
-
-**Scenario 3 — Disgruntled Employee Sabotage (10 insiders)**
-Pattern: Sends threatening emails (keywords: "i may leave", "fed up", "company will suffer", "angry") → downloads keylogger (spectorsoft.com).
-Example: User BBS0039 sent angry emails then browsed keylogger download site same day.
-
-Each insider has a CSV in `answers/r4.2-{scenario}/` with their exact malicious log entries.
+This makes it genuinely agentic: the AI doesn't just score — it **investigates**.
 
 ---
 
-## CRITICAL ARCHITECTURAL DECISIONS (ALREADY MADE)
+## WHAT IS ALREADY BUILT (DO NOT REDO THIS)
 
-Based on honest analysis of the dataset and time constraints:
+### ✅ Data Pipeline (complete)
+- `logon.csv` (854,859 rows), `file.csv` (445,581 rows), `email.csv` (2,318,899 rows)
+- `http.csv` (14GB) — grep-filtered for target domains → 157,357 rows
+- All stored in SQLite via SQLAlchemy ORM (swappable to PostgreSQL via `.env`)
+- 70 ground truth insiders across 3 scenarios, labeled in `answers/insiders.csv`
 
-### What We CUT and Why
-| Cut | Why |
-|---|---|
-| LSTM | Sequence prep/padding/tuning too slow; dataset patterns don't need it |
-| Autoencoder | Reconstruction error thresholding is non-trivial; adds noise |
-| SHAP/LIME | Slow, hard to integrate, zero demo value |
-| psychometric.csv | Big Five personality scores don't exist in real SOCs |
-| Docker | Zero demo value; adds setup overhead |
-| WebSockets | Overkill; static alerts are fine |
-| 5 dashboard pages | More pages = more bugs; 3 is plenty |
-| Full http.csv loading | 14GB can't fit in memory; grep-filter for target domains instead |
+### ✅ Feature Engineering (complete)
+- 330,268 user-day feature rows × 17 behavioral columns
+- Features: login_count, after_hours_login_count, after_hours_ratio, unique_pcs, file_copy_count, file_copy_after_hours, emails_sent, external_recipient_ratio, bcc_count, attachment_count, angry_keyword_count, job_site_visits, suspicious_domain_visits
 
-### What We KEEP and Why
-| Keep | Why |
-|---|---|
-| **Rule-based detector** | PRIMARY engine — will genuinely outperform ML on this dataset |
-| **Isolation Forest** | Lightweight ML layer — adds "AI" credibility for judges |
-| **Feature engineering** | Core analytical value |
-| **Explainability** | Every alert says exactly "why flagged?" with evidence |
-| **SQLite** | Zero setup, fast enough, perfect for demo |
-| **FastAPI** | Quick backend |
-| **React dashboard (3 pages)** | Overview, alert queue, user investigation |
+### ✅ Detection Models (3 models trained, XGBoost chosen)
 
-### Why Rules > ML Here
-This is a "dense needles" toy dataset with obvious, clean patterns:
-- wikileaks browsing → espionage (it's literally in the URL)
-- monster.com visits → job hunting
-- "fed up" emails + spectorsoft.com → sabotage
+| Model | AUC | F1 | Decision |
+|---|---|---|---|
+| Rule Engine | N/A | 100%* | ✅ Keep as first-pass filter |
+| Isolation Forest | 0.84 | 44% | ❌ Replaced |
+| Autoencoder (PyTorch) | 0.93 | 73% | ✅ Keep as corroborating signal |
+| **XGBoost + SHAP** | **1.00** | **100%** | ✅ **PRIMARY MODEL** |
 
-ML will just rediscover these obvious rules. A rule engine will be faster, more accurate, and fully explainable. The Isolation Forest adds a legitimate ML layer on top for anomaly scoring.
+XGBoost trained with `scale_pos_weight=13.3` for class imbalance. SHAP TreeExplainer provides per-user feature contributions.
 
----
+Top SHAP features: `file_copy_count_max`, `suspicious_domain_visits_mean`, `unique_pcs_sum`, `emails_sent_std`
 
-## WHAT I'M BUILDING
-
-### Architecture
+### ✅ File Structure (already exists)
 ```
-logon.csv + file.csv + email.csv + grep-filtered http.csv
-    → SQLite storage
-    → Feature engineering (per-user-per-day)
-    → Rule Engine (catches scenarios 1/2/3)
-    → Isolation Forest (anomaly scores on feature vectors)
-    → Combined risk score (rules × 0.7 + IF × 0.3) → 0-100
-    → Alert generation with explainable "why flagged?"
-    → FastAPI backend serves alerts + user data
-    → React dashboard displays everything
+AutonomusSOC/
+├── src/
+│   ├── pipeline/
+│   │   ├── ingest.py       # Data loading
+│   │   └── features.py     # Feature engineering
+│   ├── detection/
+│   │   ├── rules.py              # Rule-based 3-scenario detector
+│   │   ├── isolation_forest.py   # IF baseline
+│   │   ├── xgboost_model.py      # XGBoost + SHAP (PRIMARY)
+│   │   ├── autoencoder_model.py  # PyTorch autoencoder (SECONDARY)
+│   │   └── scorer.py             # Combines all models → alerts
+│   ├── api/
+│   │   └── main.py         # FastAPI (to be built)
+│   └── utils/
+│       ├── config.py       # Paths + DATABASE_URL
+│       └── db.py           # SQLAlchemy models
+├── data/raw/r4.2/          # CERT dataset CSVs
+├── data/processed/
+│   └── autonomussoc.db     # SQLite database
+├── run_pipeline.py         # Full pipeline runner
+└── .env                    # DATABASE_URL config
 ```
 
-### http.csv Strategy
-Instead of loading 14GB, do:
-```bash
-grep -i "wikileaks\|monster\.com\|craigslist\|jobhuntersbible\|spectorsoft" http.csv > http_filtered.csv
-```
-This gives us ONLY the rows we care about. Fast, simple, sufficient.
+---
 
-### Rule-Based Detection Engine (Primary)
+## THE 3 INSIDER THREAT SCENARIOS (CERT r4.2)
+
+### Scenario 1 — Data Exfiltration (30 insiders)
+Pattern: After-hours login → wikileaks.org browsing (keywords: spy, covert, top-secret) → USB file copy burst → logoff
+
+### Scenario 2 — Job Hunting / Disengagement (30 insiders)
+Pattern: Repeated visits to monster.com, craigslist, jobhuntersbible.com over multi-week period
+
+### Scenario 3 — Disgruntled Sabotage (10 insiders)
+Pattern: Sends threatening emails (fed up, angry, company will suffer) → visits spectorsoft.com (keylogger site)
+
+---
+
+## WHAT NEEDS TO BE BUILT NOW
+
+### 1. LLM Investigation Agent (`src/agent/`)
+
+This is the core new component. When XGBoost detects a HIGH/CRITICAL alert, the agent is triggered.
+
+**Agent Architecture — ReAct Loop:**
 ```python
-# Scenario 1: Data exfiltration
-if after_hours_login AND (wikileaks_visit OR espionage_keywords) AND usb_copy_burst:
-    → DATA_EXFILTRATION alert (CRITICAL)
-
-# Scenario 2: Job hunting
-if job_site_visits > threshold over multi-day window:
-    → JOB_HUNTING alert (HIGH)
-
-# Scenario 3: Sabotage
-if angry_email_keywords AND spyware_site_visit:
-    → DISGRUNTLED_SABOTAGE alert (CRITICAL)
+while not investigation_complete:
+    thought = llm.reason(context, observations_so_far)
+    action = parse_action(thought)       # which tool to call
+    observation = execute_tool(action)   # actually call the tool
+    context.append(observation)
+    if thought.contains("FINAL ANSWER"):
+        break
 ```
-Each alert includes human-readable contributing factors.
 
-### Isolation Forest (Secondary ML Layer)
-- Train on feature vectors of 930 normal users
-- Score all 1,000 users → anomaly score
-- Users flagged by BOTH rules + IF get higher confidence
+**Agent Tools (functions the LLM can call):**
 
-### Risk Scoring
 ```python
-risk_score = rule_confidence * 0.7 + if_anomaly_score * 0.3
-# Severity: CRITICAL (90-100), HIGH (70-89), MEDIUM (40-69), LOW (0-39)
+def get_user_logs(user_id: str, start_date: str, end_date: str, log_type: str) -> str:
+    """Query raw events for a user in a date range. log_type: logon/file/email/http"""
+
+def get_shap_explanation(user_id: str) -> str:
+    """Get XGBoost SHAP feature contributions for this user"""
+
+def get_user_risk_profile(user_id: str) -> str:
+    """Get full risk score, feature history, and behavioral baseline"""
+
+def compare_to_peers(user_id: str) -> str:
+    """Compare user's behavior to the 930 normal users (statistical deviation)"""
+
+def get_correlated_users(pattern: str) -> str:
+    """Find other users with similar suspicious patterns"""
+
+def get_alert_history(user_id: str) -> str:
+    """Check if this user had previous alerts"""
 ```
 
-### Feature Engineering (per-user-per-day)
-**From logon.csv:**
-- Login count, after-hours login ratio, unique PCs used, session duration estimates, weekend activity
-
-**From file.csv (USB):**
-- Daily file copy count, deviation from user baseline, after-hours copy ratio
-
-**From email.csv:**
-- External recipient ratio, BCC usage, angry keyword count, attachment count, email volume
-
-**From http_filtered.csv:**
-- Job-site visit count, suspicious domain count, espionage keyword count
-
-### Backend API (FastAPI + SQLite)
-```
-GET  /api/v1/alerts              — list alerts (filter: severity, type, user)
-GET  /api/v1/alerts/{id}         — alert detail with evidence + explanation
-PATCH /api/v1/alerts/{id}/status — update status (ack/dismiss/escalate)
-GET  /api/v1/users               — all users with risk scores
-GET  /api/v1/users/{id}          — user profile + risk + behavioral features
-GET  /api/v1/dashboard/overview  — summary stats (alert counts, top risks)
+**Agent Output (InvestigationReport):**
+```python
+class InvestigationReport:
+    user_id: str
+    alert_id: int
+    summary: str            # 1-2 sentence summary of what happened
+    evidence_chain: list    # Ordered list of evidence items with timestamps
+    reasoning: str          # LLM's step-by-step reasoning
+    threat_scenario: str    # DATA_EXFILTRATION / JOB_HUNTING / SABOTAGE / UNKNOWN
+    confidence: float       # 0-1 confidence in the assessment
+    recommended_action: str # ESCALATE_TO_HR / ESCALATE_TO_SECURITY / MONITOR / DISMISS
+    recommended_actions_detail: list  # Specific steps for analyst
+    correlated_users: list  # Other users with similar patterns
+    investigation_steps: list  # What tools the agent used and what it found
 ```
 
-### Frontend Dashboard (React + Vite, 3 pages)
-1. **Overview** — alert count by severity, top 10 risky users, key metrics
-2. **Alert Queue** — sortable/filterable table, severity badges, click-to-investigate
-3. **User Investigation** — risk gauge, event timeline, evidence chain, "why flagged?" explanation
+**LLM System Prompt for the Agent:**
+```
+You are an autonomous SOC (Security Operations Center) investigation agent.
+You have just received an insider threat alert. Your job is to investigate thoroughly using available tools, then produce a structured investigation report.
 
-### Tech Stack (Final)
+You must:
+1. Use tools to gather evidence
+2. Think step by step about what the evidence means
+3. Look for corroborating signals
+4. Check for correlated suspicious users
+5. Provide a clear, evidence-backed assessment
+
+Available tools: get_user_logs, get_shap_explanation, get_user_risk_profile, compare_to_peers, get_correlated_users, get_alert_history
+
+Format your investigation as:
+THOUGHT: [your reasoning]
+ACTION: tool_name(args)
+OBSERVATION: [tool result]
+... repeat ...
+FINAL ANSWER: [structured JSON report]
+```
+
+**LLM Choice — use ONE of these (in order of preference):**
+1. `openai` — GPT-4o-mini (cheap, fast, great for tool calling)
+2. `google.generativeai` — Gemini 1.5 Flash (free tier, fast)
+3. `anthropic` — Claude 3 Haiku (fast, good reasoning)
+
+Design the agent code so LLM provider is swappable via `.env`:
+```
+LLM_PROVIDER=openai  # or gemini or anthropic
+LLM_API_KEY=sk-...
+LLM_MODEL=gpt-4o-mini
+```
+
+### 2. Investigation Report Storage
+
+Add to SQLite (via SQLAlchemy):
+```sql
+CREATE TABLE investigation_reports (
+    id INTEGER PRIMARY KEY,
+    alert_id INTEGER,
+    user_id TEXT,
+    summary TEXT,
+    evidence_chain JSON,
+    reasoning TEXT,
+    threat_scenario TEXT,
+    confidence FLOAT,
+    recommended_action TEXT,
+    recommended_actions_detail JSON,
+    correlated_users JSON,
+    investigation_steps JSON,
+    llm_model TEXT,
+    tokens_used INTEGER,
+    created_at DATETIME
+);
+```
+
+### 3. FastAPI Backend (`src/api/main.py`)
+
+Build endpoints that serve the dashboard AND expose agent results:
+
+```
+GET  /api/v1/dashboard/overview          → alert counts, top risks, key metrics
+GET  /api/v1/alerts                      → all alerts (filter: severity, type)
+GET  /api/v1/alerts/{id}                 → alert detail + investigation report
+PATCH /api/v1/alerts/{id}/status         → update status
+GET  /api/v1/users                       → all users with risk scores
+GET  /api/v1/users/{id}                  → user profile + features + SHAP
+GET  /api/v1/users/{id}/logs             → raw event logs for user
+POST /api/v1/investigate/{alert_id}      → trigger LLM agent investigation
+GET  /api/v1/reports/{alert_id}          → get investigation report
+```
+
+### 4. React Dashboard (3 pages)
+
+**Page 1: Overview**
+- Alert counts by severity (CRITICAL/HIGH/MEDIUM/LOW)
+- Top 10 riskiest users with risk scores
+- "Agent investigated X alerts" stat
+- Live alert feed
+
+**Page 2: Alert Queue**
+- Table of all alerts with severity badge, user ID, alert type, score
+- "Investigated" vs "Pending investigation" status
+- Click → User Investigation page
+
+**Page 3: User Investigation**
+- Risk score gauge (big number, 0-100)
+- XGBoost detection reason (SHAP top features)
+- **Agent Investigation Report panel** — the LLM's full reasoning and evidence chain
+- Raw event timeline (chronological log entries for that user)
+- Recommended actions from the Agent
+- "Override" button for analyst
+
+---
+
+## TECH STACK (Final)
+
 | Layer | Tech |
 |---|---|
-| Language | Python 3.10+ |
-| ML | Scikit-learn (Isolation Forest only) |
-| Data | Pandas, NumPy |
-| Backend | FastAPI, Uvicorn |
-| Database | SQLite |
+| ML | XGBoost + SHAP, Scikit-learn (IF), PyTorch (Autoencoder) |
+| LLM Agent | OpenAI API / Gemini API / Anthropic (swappable) |
+| Agent Framework | Custom ReAct loop (no LangChain — too heavy) |
+| Backend | FastAPI + Uvicorn |
+| Database | SQLite (swappable to PostgreSQL via DATABASE_URL in .env) |
 | Frontend | React 18 + Vite, Recharts, Tailwind CSS |
+| Serialization | joblib for XGBoost model, torch.save for Autoencoder |
 
 ---
 
 ## WHAT I NEED FROM YOU
 
-Generate a **COMPLETE, ORDERED EXECUTION PLAN** to build everything above. The architecture is final — don't second-guess the decisions. Just tell me HOW to build it, step by step.
+Generate a COMPLETE execution plan for building the **3 remaining components** listed above, in order:
+1. LLM Investigation Agent (`src/agent/`)
+2. FastAPI Backend (`src/api/main.py`)
+3. React Dashboard (3 pages)
 
-### PHASES (in order):
-1. **Project Setup** — directory structure, virtualenv, requirements.txt, SQLite schema
-2. **Data Ingestion** — load CSVs, grep-filter http.csv, parse insiders.csv, store in SQLite
-3. **Feature Engineering** — compute per-user-per-day features from all data sources
-4. **Detection Engine** — implement 3 scenario rules + Isolation Forest + combined risk scoring
-5. **Alert Generation** — create alerts with full explainability for all detected insiders
-6. **Backend API** — FastAPI app serving all endpoints from SQLite
-7. **Frontend Dashboard** — React app with 3 pages wired to API
-8. **Integration & Demo** — end-to-end test, verify detection of 70 insiders, demo script
-
-For EACH phase give me:
-- 📋 Ordered sub-tasks (concrete, codeable)
-- 📁 Files to create (filename + what goes in each)
-- 🔑 Key code snippets for the hard parts
+For EACH component give me:
+- 📁 Files to create and what goes in each
+- 🔑 Key code snippets (especially the ReAct agent loop + tool definitions)
 - ⚠️ Pitfalls to avoid
-- ✅ "Done" checkpoint to verify before moving on
-- Biggest risk and how to dodge it
+- ✅ "Done" checkpoint
 
-Be thorough and actionable. I want to sit down and follow this like a recipe.
+Constraints:
+- DO NOT redo the detection models or pipeline — they're done and working
+- Agent must work with at least ONE real LLM API (OpenAI or Gemini preferred)
+- Keep it buildable and demo-ready
+- SQLAlchemy for all DB access — no raw SQL
 ```
 
 ---
 
-> **Usage:** Copy everything inside the code block above and paste into any LLM.
+> **Usage:** Copy everything inside the code block.
