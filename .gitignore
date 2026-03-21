@@ -42,3 +42,4 @@ logs/
 
 # Jupyter
 .ipynb_checkpoints/
+data/raw.zip

@@ -35,16 +35,74 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-flash")
 # ─── LLM Abstraction ──────────────────────────────────────────────────
 
 def _call_llm(system_prompt: str, user_message: str) -> str:
-    """Call the configured LLM provider. Returns the response text."""
+    """Call the configured LLM provider via REST API.
+    Extracts retryDelay from Gemini 429 responses and waits accordingly.
+    """
+    import time
+    import requests as _requests
+    import re as _re
+
     if LLM_PROVIDER == "gemini":
-        import google.generativeai as genai
-        genai.configure(api_key=LLM_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=LLM_MODEL,
-            system_instruction=system_prompt,
-        )
-        response = model.generate_content(user_message)
-        return response.text
+        # Models to try in order of preference
+        models_to_try = [LLM_MODEL]
+        for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
+            if fallback not in models_to_try:
+                models_to_try.append(fallback)
+
+        combined_text = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\n---\n\nUSER REQUEST:\n{user_message}"
+        last_err = None
+
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={LLM_API_KEY}"
+            payload = {"contents": [{"parts": [{"text": combined_text}]}]}
+
+            for attempt in range(3):
+                try:
+                    resp = _requests.post(url, json=payload, timeout=60)
+
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+                    elif resp.status_code == 429:
+                        # Extract retryDelay from Google's response
+                        wait = 15  # default
+                        try:
+                            err_data = resp.json()
+                            err_details = err_data.get("error", {}).get("details", [])
+                            for d in err_details:
+                                if "retryDelay" in d:
+                                    delay_str = d["retryDelay"]
+                                    # Parse "24s" or "24.5s"
+                                    match = _re.search(r"([\d.]+)", delay_str)
+                                    if match:
+                                        wait = min(int(float(match.group(1))) + 2, 65)
+                        except Exception:
+                            pass
+
+                        print(f"  [LLM] Rate-limited on {model_name} (attempt {attempt+1}/3), waiting {wait}s...")
+                        time.sleep(wait)
+                        last_err = Exception(f"429 RESOURCE_EXHAUSTED on {model_name}")
+
+                    elif resp.status_code == 404:
+                        print(f"  [LLM] Model {model_name} not found, trying next...")
+                        last_err = Exception(f"404 Model {model_name} not found")
+                        break  # Skip to next model
+
+                    else:
+                        err_msg = resp.text[:300]
+                        raise Exception(f"Gemini API error {resp.status_code}: {err_msg}")
+
+                except _requests.exceptions.Timeout:
+                    last_err = Exception("Request timed out")
+                    print(f"  [LLM] Request timed out (attempt {attempt+1}/3)")
+                    time.sleep(5)
+                except _requests.exceptions.ConnectionError as e:
+                    raise Exception(f"Cannot connect to Gemini API: {e}")
+
+        if last_err:
+            raise last_err
+        raise Exception("All LLM models failed")
 
     elif LLM_PROVIDER == "openai":
         from openai import OpenAI
