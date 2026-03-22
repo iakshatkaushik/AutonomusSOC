@@ -203,6 +203,17 @@ python run_agent.py --top 5
 python run_agent.py --user ABC123
 ```
 
+### Production Deployment (AWS EC2)
+
+A shell script is provided to automate the deployment of both the FastAPI backend and the built React frontend on an Ubuntu EC2 instance using Nginx.
+
+```bash
+# Upload your repo and data to the EC2 instance, then run:
+chmod +x deploy_ec2.sh
+./deploy_ec2.sh
+```
+The script will install all dependencies, build the Vite application, configure Nginx as a reverse proxy, and set up a `systemd` service for the backend API to keep it running 24/7.
+
 ### Configuration (`.env`)
 
 ```env
@@ -270,11 +281,11 @@ LLM_MODEL=gemini-2.5-flash
 CyberSOC-Agent/
 ├── README.md                          # This file
 ├── FLOWPLAN.md                        # Detailed project flow & implementation plan
-├── LLM_PROMPT.md                      # LLM system prompt documentation
 ├── requirements.txt                   # Python dependencies
 ├── .env                               # Configuration (DB URL, LLM keys)
 ├── .gitignore                         # Git ignore rules
 │
+├── deploy_ec2.sh                      # Automated AWS EC2 deployment script
 ├── run_pipeline.py                    # Full pipeline runner (ingest → features → detect)
 ├── run_agent.py                       # LLM investigation agent runner
 ├── run_evals.py                       # Basic model evaluation
