@@ -385,7 +385,7 @@ When a HIGH/CRITICAL alert is detected, the **ReAct Investigation Agent** is tri
 <p align="center">
   <b>AI-Powered Insider Threat Detection Hackathon</b><br/>
   <b>Techkriti'26 — IIT Kanpur</b><br/><br/>
-  <i>Where Cybersecurity Meets Intelligent Data Analysis</i>
+  <i>Where Cybersecurity Meets Intelligent Data Analysis...</i>
 </p>
 
 ---
