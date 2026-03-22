@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/banner.png" alt="AutonomusSOC Banner" width="800"/>
-</p>
-
 <h1 align="center">🛡️ CyberSOC-Agent</h1>
 <h3 align="center">Autonomous AI-Powered Level-1 SOC Agent for Insider Threat Detection</h3>
 
@@ -412,8 +408,9 @@ When a HIGH/CRITICAL alert is detected, the **ReAct Investigation Agent** is tri
 
 | Name | Role |
 |---|---|
-| **Akshat Kaushik** | Lead Developer |
-
+| **Akshat Kaushik** | Developer |
+| **Ishika Walia** | Developer |
+| **Saumya Agarwal** | Developer |
 ---
 
 ## 📄 License
