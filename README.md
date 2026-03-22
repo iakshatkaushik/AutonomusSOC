@@ -38,19 +38,19 @@ Built for the **AI-Powered Insider Threat Detection Hackathon at Techkriti'26 (I
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                          CyberSOC-Agent Pipeline                            │
+│                          CyberSOC-Agent Pipeline                             │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  ┌──────────────┐   ┌────────────────┐   ┌──────────────────────────────┐   │
-│  │  DATA LAYER  │   │   ML ENGINE    │   │      AGENTIC AI LAYER       │   │
-│  │              │   │                │   │                              │   │
-│  │ • CSV Ingest │──▶│ • Feature Eng. │──▶│ • ReAct Investigation Agent │   │
-│  │ • 3.6M rows  │   │ • Rule Engine  │   │ • Gemini / GPT LLM Backend  │   │
-│  │ • SQLite ORM │   │ • Isolation    │   │ • 6 Investigation Tools     │   │
-│  │ • 4 log types│   │   Forest       │   │ • Structured Reports        │   │
-│  │              │   │ • XGBoost+SHAP │   │                              │   │
-│  │              │   │ • Autoencoder  │   │                              │   │
-│  └──────────────┘   └────────────────┘   └──────────────────────────────┘   │
+│  ┌──────────────┐   ┌────────────────┐   ┌──────────────────────────────┐    │
+│  │  DATA LAYER  │   │   ML ENGINE    │   │      AGENTIC AI LAYER        │    │
+│  │              │   │                │   │                              │    │
+│  │ • CSV Ingest │─▶│ • Feature Eng. │──▶│ • React Investigation Agent  │    │
+│  │ • 3.6M rows  │   │ • Rule Engine  │   │ • Gemini / GPT LLM Backend   │    │
+│  │ • SQLite ORM │   │ • Isolation    │   │ • 6 Investigation Tools      │    │
+│  │ • 4 log types│   │   Forest       │   │ • Structured Reports         │    │
+│  │              │   │ • XGBoost+SHAP │   │                              │    │
+│  │              │   │ • Autoencoder  │   │                              │    │
+│  └──────────────┘   └────────────────┘   └──────────────────────────────┘    │
 │         │                   │                          │                     │
 │         └───────────────────┴──────────────────────────┘                     │
 │                              │                                               │
