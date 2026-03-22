@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import Overview from './pages/Overview';
 import AlertQueue from './pages/AlertQueue';
 import AlertInvestigation from './pages/AlertInvestigation';
+import ModelEvaluation from './pages/ModelEvaluation';
 import './index.css';
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/alerts" element={<AlertQueue />} />
           <Route path="/alerts/:id" element={<AlertInvestigation />} />
+          <Route path="/evaluation" element={<ModelEvaluation />} />
         </Routes>
       </main>
     </BrowserRouter>

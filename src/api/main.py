@@ -12,6 +12,7 @@ Endpoints:
   GET  /api/v1/reports/{alert_id}      → get investigation report
 """
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +43,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -576,8 +577,213 @@ def download_pdf_report(alert_id: int, db: Session = Depends(get_db)):
     )
 
 
+# ─── Model Evaluation ──────────────────────────────────────────────────
+
+_eval_cache = None
+
+@app.get("/api/v1/evaluation")
+def get_evaluation_metrics():
+    """Run all model evaluations and return metrics. Results are cached."""
+    global _eval_cache
+    if _eval_cache is not None:
+        return _eval_cache
+
+    import numpy as np
+    import pandas as pd
+    import xgboost as xgb_lib
+    import torch
+    import torch.nn as tnn
+    from torch.utils.data import DataLoader, TensorDataset
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.model_selection import StratifiedKFold, train_test_split
+    from sklearn.metrics import (
+        accuracy_score, precision_score, recall_score, f1_score,
+        roc_auc_score, average_precision_score, confusion_matrix
+    )
+    from src.utils.db import Insider
+
+    ML_FEATURES = [
+        "login_count", "after_hours_login_count", "after_hours_ratio",
+        "unique_pcs", "file_copy_count", "file_copy_after_hours",
+        "emails_sent", "external_recipient_ratio", "bcc_count",
+        "attachment_count", "angry_keyword_count",
+        "job_site_visits", "suspicious_domain_visits",
+    ]
+
+    # Load data
+    features_df = pd.read_sql("SELECT * FROM user_features", engine)
+    session = SessionLocal()
+    insiders = {i.user_id for i in session.query(Insider).all()}
+    session.close()
+
+    # aggregate per user
+    agg_dict = {}
+    for col in ML_FEATURES:
+        if col in features_df.columns:
+            agg_dict[f"{col}_mean"] = (col, "mean")
+            agg_dict[f"{col}_max"] = (col, "max")
+            agg_dict[f"{col}_sum"] = (col, "sum")
+            agg_dict[f"{col}_std"] = (col, "std")
+    user_agg = features_df.groupby("user_id").agg(**agg_dict).reset_index().fillna(0)
+    X = user_agg.drop("user_id", axis=1).values.astype(np.float32)
+    y = np.array([1 if uid in insiders else 0 for uid in user_agg["user_id"]])
+
+    results = {"models": [], "dataset_info": {
+        "total_users": int(len(y)),
+        "insiders": int(y.sum()),
+        "normal": int(len(y) - y.sum()),
+        "features": len([c for c in user_agg.columns if c != "user_id"]),
+        "imbalance_ratio": f"1:{int((len(y) - y.sum()) / max(y.sum(), 1))}",
+    }}
+
+    # ── 1. XGBoost ──────────────────────────────────────────────────────
+    try:
+        n_pos, n_neg = int(y.sum()), int(len(y) - y.sum())
+        spw = n_neg / max(n_pos, 1)
+        model_xgb = xgb_lib.XGBClassifier(
+            n_estimators=300, max_depth=4, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8, scale_pos_weight=spw,
+            eval_metric="logloss", random_state=42, n_jobs=-1
+        )
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv_aucs = []
+        for train_ix, val_ix in cv.split(X, y):
+            model_xgb.fit(X[train_ix], y[train_ix])
+            cv_aucs.append(float(roc_auc_score(y[val_ix], model_xgb.predict_proba(X[val_ix])[:, 1])))
+
+        X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+        model_xgb.fit(X_tr, y_tr)
+        te_probs = model_xgb.predict_proba(X_te)[:, 1]
+        te_preds = (te_probs >= 0.5).astype(int)
+        tr_probs = model_xgb.predict_proba(X_tr)[:, 1]
+        cm = confusion_matrix(y_te, te_preds).tolist()
+
+        results["models"].append({
+            "name": "XGBoost + SHAP",
+            "type": "Supervised",
+            "icon": "xgboost",
+            "accuracy": float(accuracy_score(y_te, te_preds)),
+            "precision": float(precision_score(y_te, te_preds, zero_division=0)),
+            "recall": float(recall_score(y_te, te_preds, zero_division=0)),
+            "f1": float(f1_score(y_te, te_preds, zero_division=0)),
+            "roc_auc": float(roc_auc_score(y_te, te_probs)),
+            "pr_auc": float(average_precision_score(y_te, te_probs)),
+            "cv_auc_mean": float(np.mean(cv_aucs)),
+            "cv_auc_std": float(np.std(cv_aucs)),
+            "train_auc": float(roc_auc_score(y_tr, tr_probs)),
+            "specificity": float(cm[0][0] / (cm[0][0] + cm[0][1])) if (cm[0][0] + cm[0][1]) > 0 else 0,
+            "confusion_matrix": cm,
+        })
+    except Exception as e:
+        print(f"XGBoost eval error: {e}")
+
+    # ── 2. Autoencoder ──────────────────────────────────────────────────
+    try:
+        scaler = StandardScaler()
+        X_s = scaler.fit_transform(X).astype(np.float32)
+        normal_mask = (y == 0)
+        X_normal = X_s[normal_mask]
+
+        class AE(tnn.Module):
+            def __init__(self, dim):
+                super().__init__()
+                self.enc = tnn.Sequential(tnn.Linear(dim,32), tnn.ReLU(), tnn.BatchNorm1d(32), tnn.Dropout(0.1), tnn.Linear(32,16), tnn.ReLU(), tnn.Linear(16,8))
+                self.dec = tnn.Sequential(tnn.Linear(8,16), tnn.ReLU(), tnn.Linear(16,32), tnn.ReLU(), tnn.BatchNorm1d(32), tnn.Linear(32,dim))
+            def forward(self, x): return self.dec(self.enc(x))
+
+        loader = DataLoader(TensorDataset(torch.FloatTensor(X_normal), torch.FloatTensor(X_normal)), batch_size=64, shuffle=True)
+        ae = AE(X_s.shape[1])
+        opt = torch.optim.Adam(ae.parameters(), lr=1e-3)
+        crit = tnn.MSELoss()
+        ae.train()
+        for _ in range(50):
+            for xb, yb in loader:
+                opt.zero_grad()
+                crit(ae(xb), yb).backward()
+                opt.step()
+
+        ae.eval()
+        with torch.no_grad():
+            recon = ae(torch.FloatTensor(X_s))
+            errors = torch.mean((torch.FloatTensor(X_s) - recon)**2, dim=1).numpy()
+            normal_recon = ae(torch.FloatTensor(X_normal))
+            train_errs = torch.mean((torch.FloatTensor(X_normal) - normal_recon)**2, dim=1).numpy()
+
+        train_max = float(np.max(train_errs))
+        probs_ae = np.clip(errors / (train_max * 2), 0, 1)
+        preds_ae = (probs_ae >= 0.5).astype(int)
+        cm_ae = confusion_matrix(y, preds_ae).tolist()
+
+        results["models"].append({
+            "name": "Deep Autoencoder",
+            "type": "Unsupervised",
+            "icon": "autoencoder",
+            "accuracy": float(accuracy_score(y, preds_ae)),
+            "precision": float(precision_score(y, preds_ae, zero_division=0)),
+            "recall": float(recall_score(y, preds_ae, zero_division=0)),
+            "f1": float(f1_score(y, preds_ae, zero_division=0)),
+            "roc_auc": float(roc_auc_score(y, probs_ae)) if len(np.unique(y)) > 1 else 0,
+            "pr_auc": float(average_precision_score(y, probs_ae)) if len(np.unique(y)) > 1 else 0,
+            "cv_auc_mean": 0,
+            "cv_auc_std": 0,
+            "train_auc": 0,
+            "specificity": float(cm_ae[0][0] / (cm_ae[0][0] + cm_ae[0][1])) if (cm_ae[0][0] + cm_ae[0][1]) > 0 else 0,
+            "confusion_matrix": cm_ae,
+        })
+    except Exception as e:
+        print(f"Autoencoder eval error: {e}")
+
+    # ── 3. Ensemble (Rules + Isolation Forest) ──────────────────────────
+    try:
+        risks_df = pd.read_sql("SELECT * FROM user_risks", engine)
+        y_ens = np.array([1 if uid in insiders else 0 for uid in risks_df["user_id"]])
+        probs_ens = (risks_df["risk_score"] / 100.0).values
+        preds_ens = (probs_ens >= 0.3).astype(int)
+        cm_ens = confusion_matrix(y_ens, preds_ens).tolist()
+
+        results["models"].append({
+            "name": "Ensemble (Rules + IF)",
+            "type": "Hybrid",
+            "icon": "ensemble",
+            "accuracy": float(accuracy_score(y_ens, preds_ens)),
+            "precision": float(precision_score(y_ens, preds_ens, zero_division=0)),
+            "recall": float(recall_score(y_ens, preds_ens, zero_division=0)),
+            "f1": float(f1_score(y_ens, preds_ens, zero_division=0)),
+            "roc_auc": float(roc_auc_score(y_ens, probs_ens)) if len(np.unique(y_ens)) > 1 else 0,
+            "pr_auc": float(average_precision_score(y_ens, probs_ens)) if len(np.unique(y_ens)) > 1 else 0,
+            "cv_auc_mean": 0,
+            "cv_auc_std": 0,
+            "train_auc": 0,
+            "specificity": float(cm_ens[0][0] / (cm_ens[0][0] + cm_ens[0][1])) if (cm_ens[0][0] + cm_ens[0][1]) > 0 else 0,
+            "confusion_matrix": cm_ens,
+        })
+    except Exception as e:
+        print(f"Ensemble eval error: {e}")
+
+    _eval_cache = results
+    return results
+
+
 # ─── Health ────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+
+# ─── Serve React SPA (production) ──────────────────────────────────────
+
+dist_dir = Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
+if dist_dir.exists():
+    from starlette.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+
+    app.mount("/assets", StaticFiles(directory=str(dist_dir / "assets")), name="static")
+
+    @app.get("/{path:path}")
+    async def serve_spa(path: str):
+        # Serve actual files if they exist, otherwise serve index.html (SPA)
+        file_path = dist_dir / path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(dist_dir / "index.html"))

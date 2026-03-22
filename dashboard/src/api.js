@@ -17,6 +17,7 @@ export const fetchUserLogs = (id, logType = 'all') => api.get(`/users/${id}/logs
 
 export const triggerInvestigation = (alertId) => api.post(`/investigate/${alertId}`).then(r => r.data);
 export const fetchReport = (alertId) => api.get(`/reports/${alertId}`).then(r => r.data);
+export const fetchEvaluation = () => api.get('/evaluation', { timeout: 300000 }).then(r => r.data);
 
 export const downloadReportPdf = async (alertId) => {
   const response = await api.get(`/reports/${alertId}/pdf`, { responseType: 'blob' });
