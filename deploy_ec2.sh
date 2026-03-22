@@ -5,20 +5,23 @@
 # ═══════════════════════════════════════════════════════════════════
 
 set -e
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 
 echo "═══ CyberSOC Agent — EC2 Setup ═══"
 
 # ─── 1. System packages ────────────────────────────────────────
 echo "[1/7] Installing system packages..."
-sudo apt-get update -y
-sudo apt-get install -y python3 python3-pip python3-venv git nginx curl
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" python3 python3-pip python3-venv git nginx curl
+sudo NEEDRESTART_MODE=a apt-get install -y needrestart || true
 
 # Install Node.js 20
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
 
 # ─── 2. Clone the repo ────────────────────────────────────────
-echo "[2/6] Cloning repository..."
+echo "[2/7] Cloning repository..."
 cd /home/ubuntu
 if [ -d "CyberSOC-Agent" ]; then
     cd CyberSOC-Agent && git pull
@@ -28,7 +31,7 @@ else
 fi
 
 # ─── 3. Python virtual env + dependencies ─────────────────────
-echo "[3/6] Setting up Python environment..."
+echo "[3/7] Setting up Python environment..."
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -41,8 +44,8 @@ npm install
 npm run build
 cd /home/ubuntu/CyberSOC-Agent
 
-# ─── 4. Create .env file ──────────────────────────────────────
-echo "[4/6] Setting up environment..."
+# ─── 5. Create .env file ──────────────────────────────────────
+echo "[5/7] Setting up environment..."
 cat > .env << 'ENVFILE'
 DATABASE_URL=sqlite:///data/processed/autonomussoc.db
 RAW_DATA_DIR=data/raw/r4.2
@@ -54,14 +57,13 @@ ENVFILE
 
 echo ">>> IMPORTANT: Edit /home/ubuntu/CyberSOC-Agent/.env and set your LLM_API_KEY"
 
-# ─── 5. Nginx reverse proxy ───────────────────────────────────
-echo "[5/6] Configuring Nginx..."
+# ─── 6. Nginx reverse proxy ───────────────────────────────────
+echo "[6/7] Configuring Nginx..."
 sudo tee /etc/nginx/sites-available/cybersoc > /dev/null << 'NGINX'
 server {
     listen 80;
     server_name _;
 
-    # Proxy all requests to FastAPI (which serves both API + React SPA)
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
@@ -78,8 +80,8 @@ sudo ln -sf /etc/nginx/sites-available/cybersoc /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl restart nginx
 
-# ─── 6. Systemd service for auto-start ────────────────────────
-echo "[6/6] Creating systemd service..."
+# ─── 7. Systemd service for auto-start ────────────────────────
+echo "[7/7] Creating systemd service..."
 sudo tee /etc/systemd/system/cybersoc.service > /dev/null << 'SERVICE'
 [Unit]
 Description=CyberSOC Agent API
