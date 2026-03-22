@@ -227,45 +227,31 @@ LLM_MODEL=gemini-2.5-flash
 
 | Metric | Value |
 |---|---|
-| Accuracy | 0.9950 |
-| Precision | 0.9333 |
-| Recall / Sensitivity | 1.0000 |
-| Specificity | 0.9946 |
-| F1-Score | 0.9655 |
-| Macro Precision | 0.9667 |
-| Macro Recall | 0.9973 |
-| ROC-AUC | 0.9996 |
-| PR-AUC | 0.9952 |
-| Confidence Score | 0.9713 |
+| Accuracy | 99.50 |
+| Precision | 93.33 |
+| F1-Score | 96.5 |
 
 **Overfitting Analysis:**
 
 | Metric | Value | Interpretation |
 |---|---|---|
-| Train-Val AUC Gap | 0.0004 | Excellent generalization |
-| ECE (Calibration) | 0.1185 | Well-calibrated predictions |
-| Val AUC Stability STD | 0.0032 | Consistent across data splits |
+| Train-Val AUC Gap | 0.04 | Excellent generalization |
+| ECE (Calibration) | 11.85 | Well-calibrated predictions |
+| Val AUC Stability STD | 0.32 | Consistent across data splits |
 
 ### Deep Autoencoder (Secondary — Unsupervised)
 
 | Metric | Value |
 |---|---|
-| Accuracy | 0.9380 |
-| Precision | 0.9000 |
-| Recall / Sensitivity | 0.1286 |
-| Specificity | 0.9989 |
-| ROC-AUC | 0.9022 |
-| PR-AUC | 0.4486 |
-| Insider/Normal Error Ratio | 18.38x |
+| Accuracy | 93.80 |
+| Precision | 90.00 |
 
 ### Production Ensemble (Rules + Isolation Forest)
 
 | Metric | Value |
 |---|---|
-| Accuracy | 0.4420 |
-| Precision | 0.0864 |
-| Recall / Sensitivity | 0.7286 |
-| ROC-AUC | 0.7485 |
+| Accuracy | 44.20 |
+| Precision | 08.64 |
 | Insiders Detected | 51/70 (72.86%) |
 | Total Alerts Generated | 590 |
 
