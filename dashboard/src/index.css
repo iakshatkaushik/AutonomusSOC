@@ -57,6 +57,60 @@ body {
   min-height: 100vh;
 }
 
+.app-main {
+  margin-left: 260px;
+  padding: 32px 40px;
+}
+
+.mobile-menu-btn {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 45;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(99, 135, 241, 0.22);
+  background: rgba(12, 16, 25, 0.92);
+  color: #93b4fd;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+}
+
+.sidebar-shell {
+  transition: transform 0.25s ease;
+}
+
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 15, 0.66);
+  z-index: 40;
+}
+
+.sidebar-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.15);
+  color: #94a3b8;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 60;
+}
+
 /* ─── Scrollbar ───────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -250,6 +304,45 @@ body {
   width: 16px;
   height: 16px;
   border-width: 2px;
+}
+
+@media (max-width: 1279px) {
+  .app-main {
+    padding: 24px 24px;
+  }
+}
+
+@media (max-width: 767px) {
+  .app-main {
+    margin-left: 0;
+    padding: 74px 14px 18px;
+  }
+
+  .mobile-menu-btn {
+    display: inline-flex;
+  }
+
+  .sidebar-shell {
+    transform: translateX(-100%);
+  }
+
+  .sidebar-shell.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-close-btn {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 479px) {
+  html {
+    font-size: 14px;
+  }
+
+  .app-main {
+    padding: 72px 10px 14px;
+  }
 }
 
 /* ─── Pill Filters ────────────────────────────────────────────────── */

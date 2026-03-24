@@ -287,8 +287,8 @@ export default function AlertQueue() {
             <span style={{ fontSize: '0.75rem', color: '#526077', fontWeight: 500 }}>Loading alerts...</span>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0 2px' }}>
+          <div className="overflow-x-auto w-full">
+            <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'separate', borderSpacing: '0 2px' }}>
               <thead>
                 <tr>
                   {['ID', 'User', 'Alert Type', 'Severity', 'Risk Score', 'Status', 'Investigation'].map(h => (

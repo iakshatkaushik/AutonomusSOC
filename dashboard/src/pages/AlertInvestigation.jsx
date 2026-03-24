@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { fetchAlert, fetchUserLogs, triggerInvestigation, updateAlertStatus, downloadReportPdf } from '../api';
+import useBreakpoint from '../hooks/useBreakpoint';
 
 /* ═══════════════════════════════════════════════════════════════════════
    DESIGN TOKENS
@@ -113,6 +114,7 @@ function SectionLabel({ icon, children }) {
 export default function AlertInvestigation() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { isMobile, isTablet } = useBreakpoint();
   const [alert, setAlert] = useState(null);
   const [logs, setLogs] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -263,7 +265,7 @@ export default function AlertInvestigation() {
       {/* ═══════════════════════════════════════════════════════════════
           TOP ROW — Risk → Factors → Actions
           ═══════════════════════════════════════════════════════════════ */}
-      <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr 280px', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isTablet ? '1fr' : '260px 1fr 280px', gap: 16, marginBottom: 24 }}>
 
         {/* ── RISK ASSESSMENT ───────────────────────────────────────── */}
         <Panel>
@@ -278,7 +280,7 @@ export default function AlertInvestigation() {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
             <RiskGauge score={alert.risk_score} size={160} />
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', width: '100%' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '8px 16px', width: '100%' }}>
               {[
                 { l: 'Type', v: alert.alert_type.replace(/_/g, ' ') },
                 { l: 'Score', v: alert.risk_score.toFixed(1) },
@@ -372,7 +374,7 @@ export default function AlertInvestigation() {
                 </div>
 
                 {/* Threat Signal Tiles */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (isTablet ? '1fr 1fr' : '1fr 1fr 1fr'), gap: 8 }}>
                   {dims.map((d, i) => {
                     const level = d.val >= 0.85 ? 'CRITICAL' : d.val >= 0.65 ? 'HIGH' : d.val >= 0.4 ? 'MEDIUM' : 'LOW';
                     const levColor = d.val >= 0.85 ? '#F87171' : d.val >= 0.65 ? '#FB923C' : d.val >= 0.4 ? '#FACC15' : '#4ADE80';
@@ -559,7 +561,7 @@ export default function AlertInvestigation() {
           </motion.div>
 
           {/* Key Findings */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 22 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (isTablet ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)'), gap: 10, marginBottom: 22 }}>
             {[
               { label: 'Threat Type', value: report.threat_scenario?.replace(/_/g, ' ') || 'Unknown', color: '#F87171' },
               { label: 'Confidence', value: `${((report.confidence || 0) * 100).toFixed(0)}%`, color: '#6387F1' },
@@ -636,7 +638,7 @@ export default function AlertInvestigation() {
           )}
 
           {/* Recommended Actions + Correlated Users */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 20 }}>
             {report.recommended_actions_detail?.length > 0 && (
               <div>
                 <p style={{ fontSize: '0.58rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#526077', marginBottom: 10 }}>Recommended Actions</p>

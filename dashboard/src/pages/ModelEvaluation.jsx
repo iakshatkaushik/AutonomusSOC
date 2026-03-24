@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
+import useBreakpoint from '../hooks/useBreakpoint';
 
 /* ═══════════════════════════════════════════════════════════════════════
    XGBOOST EVALUATION DATA — From held-out test set evaluation
@@ -173,6 +174,7 @@ const itemVariants = {
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════════════ */
 export default function ModelEvaluation() {
+  const { isMobile, isTablet } = useBreakpoint();
   // Radar subset
   const radarMetrics = TEST_METRICS.filter(m =>
     ['accuracy', 'precision', 'recall', 'specificity', 'f1', 'roc_auc'].includes(m.key)
@@ -218,7 +220,7 @@ export default function ModelEvaluation() {
       {/* ═══════════════════════════════════════════════════════════════
           HERO GAUGES — Top 4 metrics
           ═══════════════════════════════════════════════════════════════ */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (isTablet ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)'), gap: 16, marginBottom: 24 }}>
         {[
           { label: 'Accuracy', value: 0.9950, color: '#6387F1' },
           { label: 'Recall', value: 1.0000, color: '#4ADE80' },
@@ -267,7 +269,7 @@ export default function ModelEvaluation() {
       {/* ═══════════════════════════════════════════════════════════════
           RADAR + FULL METRICS TABLE
           ═══════════════════════════════════════════════════════════════ */}
-      <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 20, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isTablet ? '1fr' : '380px 1fr', gap: 20, marginBottom: 24 }}>
         {/* Radar Chart */}
         <motion.div
           variants={itemVariants}
@@ -400,7 +402,7 @@ export default function ModelEvaluation() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (isTablet ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)'), gap: 16 }}>
           {OVERFIT_METRICS.map((m, i) => {
             const barPct = Math.min((m.value / m.maxVal) * 100, 100);
             // For overfitting metrics, LOWER is better — so the color is green for low values
@@ -634,7 +636,7 @@ export default function ModelEvaluation() {
       <motion.div
         variants={itemVariants}
         style={{
-          display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16,
+          display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (isTablet ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)'), gap: 16,
           marginBottom: 24,
         }}
       >

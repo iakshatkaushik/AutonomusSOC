@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect } from 'react';
+import useBreakpoint from '../hooks/useBreakpoint';
 
 /* ── SVG Icons ── */
 const OverviewIcon = () => (
@@ -94,20 +95,43 @@ function LiveClock() {
 }
 
 
-export default function Sidebar() {
+export default function Sidebar({ mobileOpen = false, onClose = () => {} }) {
   const location = useLocation();
+  const { isMobile } = useBreakpoint();
+
+  useEffect(() => {
+    if (isMobile) onClose();
+  }, [location.pathname, isMobile]);
+
+  const isVisible = !isMobile || mobileOpen;
 
   return (
-    <aside
-      style={{
-        position: 'fixed', left: 0, top: 0, height: '100%', width: 260,
-        display: 'flex', flexDirection: 'column',
-        background: 'linear-gradient(180deg, #080C16 0%, #0A0F1A 40%, #0C1019 100%)',
-        borderRight: '1px solid rgba(255,255,255,0.03)',
-        zIndex: 50,
-        overflow: 'hidden',
-      }}
-    >
+    <>
+      {isMobile && mobileOpen && <div className="sidebar-overlay" onClick={onClose} />}
+      <aside
+        className={`sidebar-shell ${isVisible ? 'open' : ''}`}
+        style={{
+          position: 'fixed', left: 0, top: 0, height: '100%', width: 260,
+          display: 'flex', flexDirection: 'column',
+          background: 'linear-gradient(180deg, #080C16 0%, #0A0F1A 40%, #0C1019 100%)',
+          borderRight: '1px solid rgba(255,255,255,0.03)',
+          zIndex: 50,
+          overflow: 'hidden',
+        }}
+      >
+        {isMobile && (
+          <button
+            type="button"
+            className="sidebar-close-btn"
+            onClick={onClose}
+            aria-label="Close navigation menu"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
       {/* Floating particles */}
       <FloatingParticles />
 
@@ -338,6 +362,7 @@ export default function Sidebar() {
           <LiveClock />
         </div>
       </motion.div>
-    </aside>
+      </aside>
+    </>
   );
 }

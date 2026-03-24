@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { fetchOverview } from '../api';
+import useBreakpoint from '../hooks/useBreakpoint';
 
 /* ═══════════════════════════════════════════════════════════════════════
    DESIGN SYSTEM — Colors & Constants
@@ -228,6 +229,7 @@ export default function Overview() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const { isMobile, isTablet } = useBreakpoint();
 
   useEffect(() => {
     fetchOverview().then(d => { setData(d); setLoading(false); }).catch(() => setLoading(false));
@@ -284,7 +286,7 @@ export default function Overview() {
       {/* ═══════════════════════════════════════════════════════════════
           HERO ROW — Radial + Severity Cards
           ═══════════════════════════════════════════════════════════════ */}
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isTablet ? '1fr' : '280px 1fr', gap: 20, marginBottom: 24 }}>
 
         {/* ── Radial Donut ── */}
         <motion.div
@@ -316,7 +318,7 @@ export default function Overview() {
         </motion.div>
 
         {/* ── Severity Cards Grid ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gridTemplateRows: 'repeat(2, 1fr)', gap: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)', gridTemplateRows: isMobile ? 'auto' : 'repeat(2, 1fr)', gap: 14 }}>
           {Object.entries(data.severity_counts).map(([sev, count]) => {
             const s = SEV[sev];
             return (
@@ -374,7 +376,7 @@ export default function Overview() {
       {/* ═══════════════════════════════════════════════════════════════
           STAT STRIP — 4 metrics with icons
           ═══════════════════════════════════════════════════════════════ */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (isTablet ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)'), gap: 14, marginBottom: 24 }}>
         {[
           { label: 'Total Alerts', value: data.total_alerts, color: '#6387F1', gradient: 'rgba(99,135,241,0.08)' },
           { label: 'Open Alerts', value: data.open_alerts, color: '#38BDF8', gradient: 'rgba(56,189,248,0.08)' },
@@ -419,7 +421,7 @@ export default function Overview() {
       {/* ═══════════════════════════════════════════════════════════════
           TWO-COLUMN — AI Threat Matrix + Top Risky Users
           ═══════════════════════════════════════════════════════════════ */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.15fr', gap: 20, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isTablet ? '1fr' : '1fr 1.15fr', gap: 20, marginBottom: 24 }}>
 
         {/* ── AI Threat Matrix ── */}
         <motion.div
